@@ -10,6 +10,7 @@ const MEMCACHED = 'memcached';
 const MONGO = 'mongodb';
 const REDIS = 'redis';
 const SQL = 'sql';
+const CURL = 'curl';
 
 const MESSAGE_CONSUMER = 'queue';
 const MESSAGE_PRODUCER = 'queue';

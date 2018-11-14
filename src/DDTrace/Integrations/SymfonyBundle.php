@@ -95,6 +95,9 @@ class SymfonyBundle extends Bundle
         if (class_exists('Predis\Client')) {
             Predis::load();
         }
+        if (function_exists('curl_exec')) {
+            Curl::load();
+        }
 
         // Flushes traces to agent.
         register_shutdown_function(function () use ($scope) {

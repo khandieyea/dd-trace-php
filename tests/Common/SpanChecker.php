@@ -2,7 +2,6 @@
 
 namespace DDTrace\Tests\Common;
 
-use DDTrace\Span;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -11,46 +10,41 @@ use PHPUnit\Framework\TestCase;
 final class SpanChecker
 {
     /**
-     * @var TestCase
-     */
-    private $testCase;
-
-    /**
-     * @param TestCase $testCase
-     */
-    public function __construct($testCase)
-    {
-        $this->testCase = $testCase;
-    }
-
-    /**
      * Checks the exact match of a set of SpanAssertion with the provided Spans.
      *
      * @param $traces
      * @param SpanAssertion[] $expectedSpans
+     * @param bool $isSandbox
      */
-    public function assertSpans($traces, $expectedSpans)
+    public function assertSpans($traces, $expectedSpans, $isSandbox = false)
     {
         $flattenTraces = $this->flattenTraces($traces);
+        if (true === $isSandbox) {
+            // The sandbox API pops closed spans off a stack so spans will be in reverse order
+            $flattenTraces = array_reverse($flattenTraces);
+        }
         // First we assert that ALL the expected spans are in the actual traces and no unexpected span exists.
         $expectedSpansReferences = array_map(function (SpanAssertion $assertion) {
             return $assertion->getOperationName();
         }, $expectedSpans);
-        $tracesReferences = array_map(function (Span $span) {
-            return $span->getOperationName();
+        $tracesReferences = array_map(function (array $span) {
+            return isset($span['name']) ? $span['name'] : '';
         }, $flattenTraces);
 
         $expectedOperationsAndResources = array_map(function (SpanAssertion $assertion) {
             return $assertion->getOperationName() . ' - ' . ($assertion->getResource() ?: 'not specified');
         }, $expectedSpans);
-        $actualOperationsAndResources = array_map(function (Span $span) {
-            return $span->getOperationName() . ' - ' . $span->getResource();
+        $actualOperationsAndResources = array_map(function (array $span) {
+            if (!isset($span['name'], $span['resource'])) {
+                return '';
+            }
+            return $span['name'] . ' - ' . $span['resource'];
         }, $flattenTraces);
-        $this->testCase->assertEquals(
+        TestCase::assertEquals(
             $expectedSpansReferences,
             $tracesReferences,
-            'Missing or additional spans. Expected: ' . print_r($expectedOperationsAndResources, 1) .
-            "\n Found: " . print_r($actualOperationsAndResources, 2)
+            'Missing or additional spans. Expected: ' . print_r($expectedOperationsAndResources, true) .
+            "\n Found: " . print_r($actualOperationsAndResources, true)
         );
 
         // Then we assert content on each individual received span
@@ -62,12 +56,14 @@ final class SpanChecker
     /**
      * Checks that a span expectation is matched in a collection on Spans.
      *
-     * @param Span $span
+     * @param array $span
      * @param SpanAssertion $exp
      */
     public function assertSpan($span, SpanAssertion $exp)
     {
-        $this->testCase->assertNotNull($span, 'Expected span was not \'' . $exp->getOperationName() . '\' found.');
+        TestCase::assertNotNull($span, 'Expected span was not \'' . $exp->getOperationName() . '\' found.');
+
+        $spanMeta = isset($span['meta']) ? $span['meta'] : [];
 
         if ($exp->isOnlyCheckExistence()) {
             return;
@@ -75,66 +71,124 @@ final class SpanChecker
 
         $namePrefix = $exp->getOperationName() . ': ';
 
-        $this->testCase->assertSame(
+        TestCase::assertSame(
             $exp->getOperationName(),
-            $span->getOperationName(),
+            isset($span['name']) ? $span['name'] : '',
             $namePrefix . "Wrong value for 'operation name'"
         );
-        $this->testCase->assertSame(
+        TestCase::assertSame(
             $exp->hasError(),
-            $span->hasError(),
+            isset($span['error']) && 1 === $span['error'],
             $namePrefix . "Wrong value for 'error'"
         );
-        if ($exp->getExactTags() != SpanAssertion::NOT_TESTED) {
+        if ($exp->getExactTags() !== SpanAssertion::NOT_TESTED) {
             $filtered = [];
-            foreach ($span->getAllTags() as $key => $value) {
+            foreach ($spanMeta as $key => $value) {
                 if (!in_array($key, $exp->getExistingTagNames())) {
                     $filtered[$key] = $value;
                 }
             }
-            $this->testCase->assertEquals(
-                $exp->getExactTags(),
+            $expectedTags = $exp->getExactTags();
+            foreach ($expectedTags as $tagName => $tagValue) {
+                TestCase::assertArrayHasKey(
+                    $tagName,
+                    $filtered,
+                    $namePrefix . 'Expected tag name ' . $tagName . ' not found'
+                );
+                if (!isset($filtered[$tagName])) {
+                    continue;
+                }
+                if (is_string($tagValue)) {
+                    TestCase::assertStringMatchesFormat(
+                        $tagValue,
+                        $filtered[$tagName],
+                        $namePrefix . 'Expected tag format does not match actual value'
+                    );
+                } else {
+                    TestCase::assertEquals(
+                        $tagValue,
+                        $filtered[$tagName],
+                        $namePrefix . 'Expected tag value does not match actual value'
+                    );
+                }
+                unset($filtered[$tagName]);
+            }
+            TestCase::assertEmpty(
                 $filtered,
-                $namePrefix . "Wrong value for 'tags'"
+                $namePrefix . "Unexpected extra values for 'tags':\n" . print_r($filtered, true)
             );
-            foreach ($exp->getExistingTagNames($span->getParentId() !== null) as $tagName) {
-                $this->testCase->assertArrayHasKey($tagName, $span->getAllTags());
+            foreach ($exp->getExistingTagNames(isset($span['parent_id'])) as $tagName) {
+                TestCase::assertArrayHasKey($tagName, $spanMeta);
             }
         }
+        if ($exp->getExactMetrics() !== SpanAssertion::NOT_TESTED) {
+            TestCase::assertEquals(
+                self::filterArrayByKey($exp->getExactMetrics(), $exp->getNotTestedMetricNames(), false),
+                self::filterArrayByKey(
+                    isset($span['metrics']) ? $span['metrics'] : [],
+                    $exp->getNotTestedMetricNames(),
+                    false
+                ),
+                $namePrefix . "Wrong value for 'metrics'"
+            );
+        }
         if ($exp->getService() != SpanAssertion::NOT_TESTED) {
-            $this->testCase->assertSame(
+            TestCase::assertSame(
                 $exp->getService(),
-                $span->getService(),
+                isset($span['service']) ? $span['service'] : '',
                 $namePrefix . "Wrong value for 'service'"
             );
         }
         if ($exp->getType() != SpanAssertion::NOT_TESTED) {
-            $this->testCase->assertSame(
+            TestCase::assertSame(
                 $exp->getType(),
-                $span->getType(),
+                isset($span['type']) ? $span['type'] : '',
                 $namePrefix . "Wrong value for 'type'"
             );
         }
         if ($exp->getResource() != SpanAssertion::NOT_TESTED) {
-            $this->testCase->assertSame(
+            TestCase::assertSame(
                 $exp->getResource(),
-                $span->getResource(),
+                isset($span['resource']) ? $span['resource'] : '',
                 $namePrefix . "Wrong value for 'resource'"
             );
         }
     }
 
     /**
-     * @param Span[][] $traces
-     * @return Span[]
+     * @param array[] $traces
+     * @return array
      */
     public function flattenTraces($traces)
     {
         $result = [];
 
-        array_walk_recursive($traces, function (Span $span) use (&$result) {
-            $result[] = $span;
-        });
+        foreach ($traces as $trace) {
+            array_walk($trace, function (array $span) use (&$result) {
+                $result[] = $span;
+            });
+        }
+
+        return $result;
+    }
+
+    /**
+     * PHP < 5.6 does not offer a way to filter only specific elements in an array by key.
+     *
+     * @param array $associative
+     * @param string[] $allowedKeys
+     * @param bool $include
+     * @return array
+     */
+    private static function filterArrayByKey($associative, $allowedKeys, $include = true)
+    {
+        $result = [];
+
+        foreach ($associative as $key => $value) {
+            if (($include && in_array($key, $allowedKeys)) || (!$include && !in_array($key, $allowedKeys))) {
+                $result[$key] = $value;
+            }
+        }
 
         return $result;
     }

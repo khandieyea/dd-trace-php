@@ -2,11 +2,10 @@
 
 namespace DDTrace\Propagators;
 
-use DDTrace\Configuration;
 use DDTrace\Propagator;
 use DDTrace\Sampling\PrioritySampling;
-use DDTrace\SpanContext;
-use DDTrace\Tracer;
+use DDTrace\Contracts\SpanContext;
+use DDTrace\Contracts\Tracer;
 
 /**
  * A propagator that inject distributed tracing context in curl like indexed headers arrays:
@@ -33,19 +32,23 @@ final class CurlHeadersMap implements Propagator
     public function inject(SpanContext $spanContext, &$carrier)
     {
         foreach ($carrier as $index => $value) {
-            if (substr($value, 0, strlen(Propagator::DEFAULT_TRACE_ID_HEADER))
-                    === Propagator::DEFAULT_TRACE_ID_HEADER
+            if (
+                substr($value, 0, strlen(Propagator::DEFAULT_TRACE_ID_HEADER))
+                === Propagator::DEFAULT_TRACE_ID_HEADER
             ) {
                 unset($carrier[$index]);
-            } elseif (substr($value, 0, strlen(Propagator::DEFAULT_PARENT_ID_HEADER))
-                    === Propagator::DEFAULT_PARENT_ID_HEADER
+            } elseif (
+                substr($value, 0, strlen(Propagator::DEFAULT_PARENT_ID_HEADER))
+                === Propagator::DEFAULT_PARENT_ID_HEADER
             ) {
                 unset($carrier[$index]);
-            } elseif (substr($value, 0, strlen(Propagator::DEFAULT_BAGGAGE_HEADER_PREFIX))
-                    === Propagator::DEFAULT_BAGGAGE_HEADER_PREFIX
+            } elseif (
+                substr($value, 0, strlen(Propagator::DEFAULT_BAGGAGE_HEADER_PREFIX))
+                === Propagator::DEFAULT_BAGGAGE_HEADER_PREFIX
             ) {
                 unset($carrier[$index]);
-            } elseif (substr($value, 0, strlen(Propagator::DEFAULT_SAMPLING_PRIORITY_HEADER))
+            } elseif (
+                substr($value, 0, strlen(Propagator::DEFAULT_SAMPLING_PRIORITY_HEADER))
                 === Propagator::DEFAULT_SAMPLING_PRIORITY_HEADER
             ) {
                 unset($carrier[$index]);
